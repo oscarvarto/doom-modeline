@@ -230,6 +230,7 @@ If DEFAULT is non-nil, set the default mode-line for all buffers."
   :keymap doom-modeline-mode-map
   (if doom-modeline-mode
       (progn
+        (doom-modeline--capsule-activate)   ; Capsule: transparent mode-line bg
         (doom-modeline-refresh-bars)        ; Create bars
         (doom-modeline-set-main-modeline t) ; Set default mode-line
 
@@ -263,6 +264,9 @@ If DEFAULT is non-nil, set the default mode-line for all buffers."
         ;; Setup font height cache
         (add-hook 'after-setting-font-hook #'doom-modeline--reset-font-height-cache)
 
+        ;; Capsule: refresh colors when theme changes
+        (advice-add #'load-theme :after #'doom-modeline--capsule-refresh)
+
         ;; Special handles
         (advice-add #'speedbar-set-mode-line-format :override #'doom-modeline-set-speebar-modeline)
 
@@ -271,6 +275,7 @@ If DEFAULT is non-nil, set the default mode-line for all buffers."
         (advice-add #'helm-display-mode-line :after #'doom-modeline-set-helm-modeline)
         (setq helm-ag-show-status-function #'doom-modeline-set-helm-modeline))
     (progn
+      (doom-modeline--capsule-deactivate) ; Capsule: restore mode-line bg
       ;; Restore mode-line
       (let ((original-format (doom-modeline--original-value 'mode-line-format)))
         (setq-default mode-line-format original-format)
@@ -302,6 +307,9 @@ If DEFAULT is non-nil, set the default mode-line for all buffers."
 
       ;; For font height cache
       (remove-hook 'after-setting-font-hook #'doom-modeline--reset-font-height-cache)
+
+      ;; Capsule: remove theme-change advice
+      (advice-remove #'load-theme #'doom-modeline--capsule-refresh)
 
       ;; For special handles
       (advice-remove #'speedbar-set-mode-line-format #'doom-modeline-set-speebar-modeline)

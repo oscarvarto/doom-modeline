@@ -1502,11 +1502,11 @@ regions, 5. The current/total for the highlight term (with `symbol-overlay'),
 (add-hook 'window-configuration-change-hook #'doom-modeline-invalidate-huds)
 
 (doom-modeline-def-segment bar
-  "The bar regulates the height of the `doom-modeline' in GUI."
-  (when (display-graphic-p)
-    (if doom-modeline-hud
-        (doom-modeline--hud)
-      (doom-modeline--bar))))
+  "The bar regulates the height of the `doom-modeline' in GUI.
+When `doom-modeline-capsule' is non-nil, the bar is hidden since
+the modal capsule replaces it as the visual anchor."
+  (when (and (display-graphic-p) (not doom-modeline-capsule))
+    (if doom-modeline-hud (doom-modeline--hud) (doom-modeline--bar))))
 
 (doom-modeline-def-segment hud
   "Powerline's hud segment reimplemented in the style of bar segment."
@@ -1889,16 +1889,21 @@ mouse-1: Display Line and Column Mode Menu")
 
 (defun doom-modeline--modal-icon (text face help-echo &optional icon unicode)
   "Display the model icon with FACE and HELP-ECHO.
-TEXT is alternative if icon is not available."
-  (propertize (doom-modeline-icon
-               'mdicon
-               (and doom-modeline-modal-icon
-                    (or (and doom-modeline-modal-modern-icon icon)
-                        "nf-md-record"))
-               (or (and doom-modeline-modal-modern-icon unicode) "●")
-               text
-               :face (doom-modeline-face face))
-              'help-echo help-echo))
+TEXT is alternative if icon is not available.
+When `doom-modeline-capsule' is non-nil and display is graphic,
+wraps the result in a colored capsule using FACE colors."
+  (let ((result (propertize (doom-modeline-icon
+                             'mdicon
+                             (and doom-modeline-modal-icon
+                                  (or (and doom-modeline-modal-modern-icon icon)
+                                      "nf-md-record"))
+                             (or (and doom-modeline-modal-modern-icon unicode) "●")
+                             text
+                             :face (doom-modeline-face face))
+                            'help-echo help-echo)))
+    (if doom-modeline-capsule
+        (doom-modeline--capsule-wrap-modal result face)
+      result)))
 
 (defsubst doom-modeline--evil ()
   "The current evil state. Requires `evil-mode' to be enabled."

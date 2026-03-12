@@ -105,6 +105,35 @@ If the actual char height is larger, it respects the actual char height."
   :type 'boolean
   :group 'doom-modeline)
 
+(defcustom doom-modeline-capsule nil
+  "Whether to use capsule-style rounded edges on the modeline.
+When non-nil, the modal indicator is wrapped in a colored pill
+using rounded powerline separators.
+Requires a font with powerline glyphs (e.g. any Nerd Font).
+Works in both GUI and terminal (if the terminal font has the glyphs)."
+  :type 'boolean
+  :group 'doom-modeline)
+
+(defcustom doom-modeline-capsule-font-family nil
+  "Font family to use for capsule separator glyphs.
+When nil, uses the default mode-line font.  Set to a Nerd Font
+family name if the default font lacks powerline glyphs."
+  :type '(choice (const nil) string)
+  :group 'doom-modeline)
+
+(defcustom doom-modeline-capsule-modal-color nil
+  "Fixed background color for the modal capsule pill.
+When non-nil, this color is used as the capsule background for
+all modal states (normal, insert, visual, etc.) instead of
+deriving the color from each state's face foreground.
+Set to a color string like \"#cba6f7\" (catppuccin mauve) for
+a consistent purple capsule across all states."
+  :type '(choice (const :tag "Auto (from state face)" nil) string)
+  :group 'doom-modeline)
+
+(defvar doom-modeline--capsule-original-ml-bg nil
+  "Saved original mode-line background for capsule mode.")
+
 (defcustom doom-modeline-hud-min-height 2
   "Minimum height in pixels of the \"thumb\" of the hud.
 Only respected in GUI."
@@ -1268,6 +1297,83 @@ used as an advice to window creation functions."
   "Alist of modeline definitions.
 Each element is (NAME . ((lhs-segments...) (rhs-segments...))).")
 
+;;
+;; Capsule rendering helpers
+;;
+
+(defun doom-modeline--capsule-char (char fg-color bg-color)
+  "Propertize CHAR as a capsule edge with FG-COLOR and BG-COLOR.
+Uses `doom-modeline-capsule-font-family' when set."
+  (let ((face `(:foreground ,fg-color :background ,bg-color)))
+    (when doom-modeline-capsule-font-family
+      (setq face (append face `(:family ,doom-modeline-capsule-font-family))))
+    (propertize char 'face face)))
+
+(defun doom-modeline--capsule-ml-bg ()
+  "Return the effective modeline capsule background.
+This is the saved original mode-line background color."
+  (or doom-modeline--capsule-original-ml-bg
+      (face-background 'mode-line nil t)))
+
+(defun doom-modeline--capsule-wrap-lhs (content)
+  "Wrap left-hand CONTENT with capsule edges.
+Returns a mode-line-format construct."
+  (if doom-modeline-capsule
+      (let ((ml-bg (doom-modeline--capsule-ml-bg))
+            (frame-bg (face-background 'default nil t)))
+        (list (doom-modeline--capsule-char "\xe0b6" ml-bg frame-bg)
+              content
+              (doom-modeline--capsule-char "\xe0b4" ml-bg frame-bg)))
+    content))
+
+(defun doom-modeline--capsule-wrap-rhs (content)
+  "Wrap right-hand CONTENT with capsule edges.
+Returns a mode-line-format construct."
+  (if doom-modeline-capsule
+      (let ((ml-bg (doom-modeline--capsule-ml-bg))
+            (frame-bg (face-background 'default nil t)))
+        (list (doom-modeline--capsule-char "\xe0b6" ml-bg frame-bg)
+              content
+              (doom-modeline--capsule-char "\xe0b4" ml-bg frame-bg)))
+    content))
+
+(defun doom-modeline--capsule-activate ()
+  "Save the current mode-line background for capsule edge rendering.
+The mode-line bar keeps its normal appearance; only the modal
+indicator segment gets capsule edges (via `doom-modeline--capsule-wrap-modal')."
+  (when doom-modeline-capsule
+    (setq doom-modeline--capsule-original-ml-bg
+          (face-background 'mode-line nil t))))
+
+(defun doom-modeline--capsule-deactivate ()
+  "Clear saved capsule state."
+  (setq doom-modeline--capsule-original-ml-bg nil))
+
+(defun doom-modeline--capsule-refresh (&rest _)
+  "Refresh capsule colors after a theme change.
+Resets the saved mode-line bg so `doom-modeline--capsule-activate'
+picks up the new theme colors."
+  (when doom-modeline-capsule
+    (setq doom-modeline--capsule-original-ml-bg nil)
+    (doom-modeline--capsule-activate)))
+
+(defun doom-modeline--capsule-wrap-modal (content face)
+  "Wrap modal CONTENT with capsule edges, inverting FACE colors.
+Uses `doom-modeline-capsule-modal-color' when set, otherwise
+derives the capsule color from FACE foreground."
+  (let* ((capsule-bg (or doom-modeline-capsule-modal-color
+                         (face-foreground face nil t)))
+         (ml-bg (or (doom-modeline--capsule-ml-bg)
+                    (face-background 'mode-line nil t)))
+         (text-fg (face-background 'default nil t))
+         (cap-face `(:foreground ,capsule-bg :background ,ml-bg
+                     ,@(when doom-modeline-capsule-font-family
+                         `(:family ,doom-modeline-capsule-font-family))))
+         (text-face `(:foreground ,text-fg :background ,capsule-bg :weight bold)))
+    (concat (propertize "\xe0b6" 'face cap-face)
+            (propertize (substring-no-properties content) 'face text-face)
+            (propertize "\xe0b4" 'face cap-face))))
+
 (defmacro doom-modeline-def-segment (name &rest body)
   "Define a modeline segment NAME with BODY and byte compiles it."
   (declare (indent defun) (doc-string 2))
@@ -1324,37 +1430,35 @@ Example:
         (rhs-forms (doom-modeline--prepare-segments rhs)))
     (defalias sym
       (lambda ()
-        (list lhs-forms
-              (let* ((rhs-str (format-mode-line `("" ,@rhs-forms)))
-                     (rhs-width (progn
-                                  (add-face-text-property
-                                   0 (length rhs-str) 'mode-line t rhs-str)
-                                  (doom-modeline-string-pixel-width rhs-str))))
-                (propertize
-                 " "
-                 'face (doom-modeline-face)
-                 'display
-                 ;; Backport from `mode-line-right-align-edge' in 30
-                 (if (and (display-graphic-p)
-                          (not (eq mode-line-right-align-edge 'window)))
-		             `(space :align-to (- ,mode-line-right-align-edge
-                                          (,rhs-width)))
-		           `(space :align-to (,(- (window-pixel-width)
-                                          (window-scroll-bar-width)
-                                          (window-right-divider-width)
-                                          (* (or (car (window-margins)) 1)
-                                             (frame-char-width))
-                                          ;; Manually account for value of
-                                          ;; `mode-line-right-align-edge' even
-                                          ;; when display is non-graphical
-                                          (pcase mode-line-right-align-edge
-                                            ('right-margin
-                                             (or (cdr (window-margins)) 0))
-                                            ('right-fringe
-                                             (or (cadr (window-fringes)) 0))
-                                            (_ 0))
-                                          rhs-width))))))
-              rhs-forms))
+        (let* ((lhs-content lhs-forms)
+               (rhs-content rhs-forms)
+               (rhs-str (format-mode-line `("" ,@rhs-forms)))
+               (rhs-width (progn
+                             (add-face-text-property
+                              0 (length rhs-str) 'mode-line t rhs-str)
+                             (doom-modeline-string-pixel-width rhs-str)))
+               (spacer (propertize
+                        " "
+                        'face (doom-modeline-face)
+                        'display
+                        ;; Backport from `mode-line-right-align-edge' in 30
+                        (if (and (display-graphic-p)
+                                 (not (eq mode-line-right-align-edge 'window)))
+		                    `(space :align-to (- ,mode-line-right-align-edge
+                                                 (,rhs-width)))
+		                  `(space :align-to (,(- (window-pixel-width)
+                                                 (window-scroll-bar-width)
+                                                 (window-right-divider-width)
+                                                 (* (or (car (window-margins)) 1)
+                                                    (frame-char-width))
+                                                 (pcase mode-line-right-align-edge
+                                                   ('right-margin
+                                                    (or (cdr (window-margins)) 0))
+                                                   ('right-fringe
+                                                    (or (cadr (window-fringes)) 0))
+                                                   (_ 0))
+                                                 rhs-width)))))))
+          (list lhs-content spacer rhs-content)))
       (concat "Modeline:\n"
               (format "  %s\n  %s"
                       (prin1-to-string lhs)
